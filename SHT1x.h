@@ -22,17 +22,20 @@ class SHT1x
 {
   public:
     SHT1x(int dataPin, int clockPin);
+    SHT1x(int dataPin, int clockPin, int powerPin);
+    SHT1x(int dataPin, int clockPin, int powerPin, int gndPin);
+    void update();
     float readHumidity();
     float readTemperatureC();
     float readTemperatureF();
   private:
+    int rawHum=0;
+    int rawTemp=0;
     int _dataPin;
     int _clockPin;
-    int _numBits;
-    float readTemperatureRaw();
-    int shiftIn(int _dataPin, int _clockPin, int _numBits);
+    char state;
     void sendCommandSHT(int _command, int _dataPin, int _clockPin);
-    void waitForResultSHT(int _dataPin);
+    bool waitForResultSHT(int _dataPin);
     int getData16SHT(int _dataPin, int _clockPin);
     void skipCrcSHT(int _dataPin, int _clockPin);
 };

@@ -22,27 +22,82 @@ SHT1x::SHT1x(int dataPin, int clockPin)
   _dataPin = dataPin;
   _clockPin = clockPin;
 }
+SHT1x::SHT1x(int dataPin, int clockPin, int powerPin)
+{
+  _dataPin = dataPin;
+  _clockPin = clockPin;
+  pinMode(powerPin, OUTPUT);
+  digitalWrite(powerPin, HIGH);
+  state=0;
+}
+SHT1x::SHT1x(int dataPin, int clockPin, int powerPin, int gndPin)
+{
+  _dataPin = dataPin;
+  _clockPin = clockPin;
+  pinMode(powerPin, OUTPUT);
+  pinMode(gndPin, OUTPUT);
+  digitalWrite(powerPin, HIGH);
+  digitalWrite(gndPin, LOW);
+  state=0;
+}
 
 
 /* ================  Public methods ================ */
+/**
+ * Reads current temperature & temperature-corrected relative humidity
+ */
+void SHT1x::update()
+{
+  const int _gHumidCmd = 0b00000101;// Command to send to the SHT1x to request humidity
+  const int _gTempCmd  = 0b00000011;// Command to send to the SHT1x to request Temperature
+  switch (state){
+    case 0:
+      sendCommandSHT(_gTempCmd, _dataPin, _clockPin);
+      state=1;
+      break;
+    case 1:
+      // Wait Conversion
+      if(waitForResultSHT(_dataPin))state=2;
+      else state=1;
+      break;
+    case 2:
+      // Get temperature value
+      rawTemp = getData16SHT(_dataPin, _clockPin);
+      skipCrcSHT(_dataPin, _clockPin);
+      state=3;
+      break;
+    case 3:
+      sendCommandSHT(_gHumidCmd, _dataPin, _clockPin);
+      state=4;
+      break;
+    case 4:
+      // Wait Conversion
+      if(waitForResultSHT(_dataPin))state=5;
+      else state = 4;
+      break;
+    case 5:
+      // Get relative humidity value
+      rawHum = getData16SHT(_dataPin, _clockPin);
+      skipCrcSHT(_dataPin, _clockPin);
+      state=0;
+      break;
+  }
 
+  return ;
+}
 /**
  * Reads the current temperature in degrees Celsius
  */
 float SHT1x::readTemperatureC()
 {
-  int _val;                // Raw value returned from sensor
   float _temperature;      // Temperature derived from raw value
 
   // Conversion coefficients from SHT15 datasheet
   const float D1 = -40.0;  // for 14 Bit @ 5V
   const float D2 =   0.01; // for 14 Bit DEGC
 
-  // Fetch raw value
-  _val = readTemperatureRaw();
-
   // Convert raw value to degrees Celsius
-  _temperature = (_val * D2) + D1;
+  _temperature = (rawTemp * D2) + D1;
 
   return (_temperature);
 }
@@ -52,18 +107,14 @@ float SHT1x::readTemperatureC()
  */
 float SHT1x::readTemperatureF()
 {
-  int _val;                 // Raw value returned from sensor
   float _temperature;       // Temperature derived from raw value
 
   // Conversion coefficients from SHT15 datasheet
   const float D1 = -40.0;   // for 14 Bit @ 5V
   const float D2 =   0.018; // for 14 Bit DEGF
 
-  // Fetch raw value
-  _val = readTemperatureRaw();
-
   // Convert raw value to degrees Fahrenheit
-  _temperature = (_val * D2) + D1;
+  _temperature = (rawTemp * D2) + D1;
 
   return (_temperature);
 }
@@ -73,7 +124,6 @@ float SHT1x::readTemperatureF()
  */
 float SHT1x::readHumidity()
 {
-  int _val;                    // Raw humidity value returned from sensor
   float _linearHumidity;       // Humidity with linear correction applied
   float _correctedHumidity;    // Temperature-corrected humidity
   float _temperature;          // Raw temperature value
@@ -85,65 +135,20 @@ float SHT1x::readHumidity()
   const float T1 =  0.01;      // for 14 Bit @ 5V
   const float T2 =  0.00008;   // for 14 Bit @ 5V
 
-  // Command to send to the SHT1x to request humidity
-  int _gHumidCmd = 0b00000101;
-
-  // Fetch the value from the sensor
-  sendCommandSHT(_gHumidCmd, _dataPin, _clockPin);
-  waitForResultSHT(_dataPin);
-  _val = getData16SHT(_dataPin, _clockPin);
-  skipCrcSHT(_dataPin, _clockPin);
-
   // Apply linear conversion to raw value
-  _linearHumidity = C1 + C2 * _val + C3 * _val * _val;
+  _linearHumidity = C1 + C2 * rawHum + C3 * rawHum * rawHum;
 
   // Get current temperature for humidity correction
   _temperature = readTemperatureC();
 
   // Correct humidity value for current temperature
-  _correctedHumidity = (_temperature - 25.0 ) * (T1 + T2 * _val) + _linearHumidity;
+  _correctedHumidity = (_temperature - 25.0 ) * (T1 + T2 * rawHum) + _linearHumidity;
 
   return (_correctedHumidity);
 }
 
 
 /* ================  Private methods ================ */
-
-/**
- * Reads the current raw temperature value
- */
-float SHT1x::readTemperatureRaw()
-{
-  int _val;
-
-  // Command to send to the SHT1x to request Temperature
-  int _gTempCmd  = 0b00000011;
-
-  sendCommandSHT(_gTempCmd, _dataPin, _clockPin);
-  waitForResultSHT(_dataPin);
-  _val = getData16SHT(_dataPin, _clockPin);
-  skipCrcSHT(_dataPin, _clockPin);
-
-  return (_val);
-}
-
-/**
- */
-int SHT1x::shiftIn(int _dataPin, int _clockPin, int _numBits)
-{
-  int ret = 0;
-  int i;
-
-  for (i=0; i<_numBits; ++i)
-  {
-     digitalWrite(_clockPin, HIGH);
-     delay(10);  // I don't know why I need this, but without it I don't get my 8 lsb of temp
-     ret = ret*2 + digitalRead(_dataPin);
-     digitalWrite(_clockPin, LOW);
-  }
-
-  return(ret);
-}
 
 /**
  */
@@ -179,28 +184,16 @@ void SHT1x::sendCommandSHT(int _command, int _dataPin, int _clockPin)
   }
 }
 
+
 /**
+ * waitForResultSHT(int _dataPin)
+ * Check if the conversion has ended in which case returns true
  */
-void SHT1x::waitForResultSHT(int _dataPin)
+bool SHT1x::waitForResultSHT(int _dataPin)
 {
-  int i;
-  int ack;
-
   pinMode(_dataPin, INPUT);
-
-  for(i= 0; i < 100; ++i)
-  {
-    delay(10);
-    ack = digitalRead(_dataPin);
-
-    if (ack == LOW) {
-      break;
-    }
-  }
-
-  if (ack == HIGH) {
-    //Serial.println("Ack Error 2"); // Can't do serial stuff here, need another way of reporting errors
-  }
+  if (digitalRead(_dataPin) == LOW) return true;
+  else return false;
 }
 
 /**
@@ -212,7 +205,7 @@ int SHT1x::getData16SHT(int _dataPin, int _clockPin)
   // Get the most significant bits
   pinMode(_dataPin, INPUT);
   pinMode(_clockPin, OUTPUT);
-  val = shiftIn(_dataPin, _clockPin, 8);
+  val = shiftIn(_dataPin, _clockPin, MSBFIRST);
   val *= 256;
 
   // Send the required ack
@@ -224,7 +217,7 @@ int SHT1x::getData16SHT(int _dataPin, int _clockPin)
 
   // Get the least significant bits
   pinMode(_dataPin, INPUT);
-  val |= shiftIn(_dataPin, _clockPin, 8);
+  val |= shiftIn(_dataPin, _clockPin, MSBFIRST);
 
   return val;
 }
